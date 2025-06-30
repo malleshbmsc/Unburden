@@ -24,7 +24,7 @@ import Animated, {
   Easing,
 } from 'react-native-reanimated';
 import { usePremium } from '@/hooks/usePremium';
-import { geminiService } from '@/services/geminiService';
+import { apiService } from '@/services/apiService';
 
 const { width, height } = Dimensions.get('window');
 
@@ -155,21 +155,6 @@ export default function ChatScreen() {
       }));
   };
 
-  const generateAIResponse = async (userMessage: string): Promise<string> => {
-    try {
-      setIsGeneratingResponse(true);
-      const conversationHistory = getConversationHistory();
-      const response = await geminiService.generateResponse(userMessage, conversationHistory);
-      return response;
-    } catch (error) {
-      console.error('Error generating AI response:', error);
-      // Fallback response
-      return "I'm here with you, and I want you to know that your feelings are completely valid. Sometimes I need a moment to find the right words, but please know that I'm listening with care. 💜";
-    } finally {
-      setIsGeneratingResponse(false);
-    }
-  };
-
   const simulateTypingResponse = async (userMessage: string, messageId: string) => {
     setIsAITyping(true);
     
@@ -185,8 +170,10 @@ export default function ChatScreen() {
     setMessages(prev => [...prev, typingMessage]);
 
     try {
-      // Generate AI response
-      const responseText = await generateAIResponse(userMessage);
+      // Generate AI response using API service
+      setIsGeneratingResponse(true);
+      const conversationHistory = getConversationHistory();
+      const responseText = await apiService.generateChatResponse(userMessage, conversationHistory);
       
       // Simulate realistic typing delay based on response length
       const typingDelay = Math.min(Math.max(responseText.length * 30, 1500), 4000);
@@ -201,6 +188,7 @@ export default function ChatScreen() {
           )
         );
         setIsAITyping(false);
+        setIsGeneratingResponse(false);
         
         // Keep focus on input after AI responds (like WhatsApp)
         setTimeout(() => {
@@ -224,6 +212,7 @@ export default function ChatScreen() {
           )
         );
         setIsAITyping(false);
+        setIsGeneratingResponse(false);
         setTimeout(() => {
           textInputRef.current?.focus();
         }, 300);
@@ -286,9 +275,9 @@ export default function ChatScreen() {
     setMessages(prev => [...prev, typingMessage]);
 
     try {
-      // Generate mood-specific response using Gemini
+      // Generate mood-specific response using API service
       const conversationHistory = getConversationHistory();
-      const responseText = await geminiService.generateMoodResponse(option.action, conversationHistory);
+      const responseText = await apiService.generateMoodResponse(option.action, conversationHistory);
       
       // Simulate typing delay
       const typingDelay = Math.min(Math.max(responseText.length * 25, 1200), 3000);

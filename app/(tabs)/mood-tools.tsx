@@ -24,7 +24,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { usePremium } from '@/hooks/usePremium';
 import PremiumModal from '@/components/PremiumModal';
-import { moodToolsService, QuickWin, AffirmationResponse } from '@/services/moodToolsService';
+import { apiService, QuickWin, AffirmationResponse } from '@/services/apiService';
 
 const { width } = Dimensions.get('window');
 
@@ -80,7 +80,7 @@ export default function MoodToolsScreen() {
   const loadInitialAffirmation = async () => {
     try {
       setIsLoadingAffirmation(true);
-      const affirmation = await moodToolsService.generateAffirmation(isPremium);
+      const affirmation = await apiService.generateAffirmation(isPremium);
       setCurrentAffirmation(affirmation);
     } catch (error) {
       console.error('Error loading initial affirmation:', error);
@@ -104,7 +104,7 @@ export default function MoodToolsScreen() {
       if (currentHour < 12) timeOfDay = 'morning';
       else if (currentHour >= 18) timeOfDay = 'evening';
       
-      const wins = await moodToolsService.generateQuickWins(3, timeOfDay);
+      const wins = await apiService.generateQuickWins(3, timeOfDay);
       setQuickWins(wins);
     } catch (error) {
       console.error('Error loading initial quick wins:', error);
@@ -188,7 +188,7 @@ export default function MoodToolsScreen() {
   const getNewAffirmation = async () => {
     try {
       setIsLoadingAffirmation(true);
-      const newAffirmation = await moodToolsService.generateAffirmation(isPremium);
+      const newAffirmation = await apiService.generateAffirmation(isPremium);
       setCurrentAffirmation(newAffirmation);
     } catch (error) {
       console.error('Error getting new affirmation:', error);
@@ -219,7 +219,7 @@ export default function MoodToolsScreen() {
       if (currentHour < 12) timeOfDay = 'morning';
       else if (currentHour >= 18) timeOfDay = 'evening';
       
-      const newWins = await moodToolsService.generateQuickWins(3, timeOfDay);
+      const newWins = await apiService.generateQuickWins(3, timeOfDay);
       setQuickWins(newWins);
     } catch (error) {
       console.error('Error refreshing quick wins:', error);

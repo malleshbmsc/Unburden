@@ -1,3 +1,12 @@
+interface QuickWinsRequest {
+  count?: number;
+  timeOfDay?: 'morning' | 'afternoon' | 'evening';
+}
+
+interface AffirmationRequest {
+  isPremium?: boolean;
+}
+
 interface QuickWin {
   id: string;
   text: string;
@@ -19,79 +28,100 @@ interface GeminiResponse {
   }[];
 }
 
-class MoodToolsService {
-  private apiKey: string;
-  private baseUrl = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent';
-  private lastAffirmations: string[] = []; // Track recent affirmations to avoid repetition
-  private maxHistorySize = 10; // Keep track of last 10 affirmations
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent';
 
-  constructor() {
-    this.apiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
-    if (!this.apiKey) {
-      throw new Error('Gemini API key not found in environment variables');
-    }
+// In-memory storage for avoiding repetition (in production, use a database)
+let lastAffirmations: string[] = [];
+const maxHistorySize = 10;
+
+async function makeGeminiRequest(prompt: string): Promise<string> {
+  if (!GEMINI_API_KEY) {
+    throw new Error('API key not configured');
   }
 
-  private async makeGeminiRequest(prompt: string): Promise<string> {
-    try {
-      const requestBody = {
-        contents: [{
-          role: 'user',
-          parts: [{ text: prompt }]
-        }],
-        generationConfig: {
-          temperature: 0.9, // Increased for more variety
-          topK: 50, // Increased for more diversity
-          topP: 0.95,
-          maxOutputTokens: 1024,
-        },
-        safetySettings: [
-          {
-            category: "HARM_CATEGORY_HARASSMENT",
-            threshold: "BLOCK_MEDIUM_AND_ABOVE"
-          },
-          {
-            category: "HARM_CATEGORY_HATE_SPEECH",
-            threshold: "BLOCK_MEDIUM_AND_ABOVE"
-          },
-          {
-            category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-            threshold: "BLOCK_MEDIUM_AND_ABOVE"
-          },
-          {
-            category: "HARM_CATEGORY_DANGEROUS_CONTENT",
-            threshold: "BLOCK_MEDIUM_AND_ABOVE"
-          }
-        ]
-      };
-
-      const response = await fetch(`${this.baseUrl}?key=${this.apiKey}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Gemini API request failed: ${response.status}`);
+  const requestBody = {
+    contents: [{
+      role: 'user',
+      parts: [{ text: prompt }]
+    }],
+    generationConfig: {
+      temperature: 0.9,
+      topK: 50,
+      topP: 0.95,
+      maxOutputTokens: 1024,
+    },
+    safetySettings: [
+      {
+        category: "HARM_CATEGORY_HARASSMENT",
+        threshold: "BLOCK_MEDIUM_AND_ABOVE"
+      },
+      {
+        category: "HARM_CATEGORY_HATE_SPEECH",
+        threshold: "BLOCK_MEDIUM_AND_ABOVE"
+      },
+      {
+        category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+        threshold: "BLOCK_MEDIUM_AND_ABOVE"
+      },
+      {
+        category: "HARM_CATEGORY_DANGEROUS_CONTENT",
+        threshold: "BLOCK_MEDIUM_AND_ABOVE"
       }
+    ]
+  };
 
-      const data: GeminiResponse = await response.json();
-      
-      if (!data.candidates || data.candidates.length === 0) {
-        throw new Error('No response generated from Gemini');
-      }
+  const response = await fetch(`${GEMINI_BASE_URL}?key=${GEMINI_API_KEY}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(requestBody),
+  });
 
-      return data.candidates[0].content.parts[0].text.trim();
-
-    } catch (error) {
-      console.error('Error making Gemini request:', error);
-      throw error;
-    }
+  if (!response.ok) {
+    throw new Error(`Gemini API request failed: ${response.status}`);
   }
 
-  async generateQuickWins(count: number = 3, timeOfDay: 'morning' | 'afternoon' | 'evening' = 'afternoon'): Promise<QuickWin[]> {
+  const data: GeminiResponse = await response.json();
+  
+  if (!data.candidates || data.candidates.length === 0) {
+    throw new Error('No response generated from Gemini');
+  }
+
+  return data.candidates[0].content.parts[0].text.trim();
+}
+
+// Quick Wins endpoint
+export async function POST(request: Request): Promise<Response> {
+  try {
+    const url = new URL(request.url);
+    const endpoint = url.searchParams.get('endpoint');
+
+    if (endpoint === 'quick-wins') {
+      return await handleQuickWins(request);
+    } else if (endpoint === 'affirmation') {
+      return await handleAffirmation(request);
+    } else {
+      return Response.json(
+        { error: 'Invalid endpoint. Use ?endpoint=quick-wins or ?endpoint=affirmation' },
+        { status: 400 }
+      );
+    }
+  } catch (error) {
+    console.error('Error in mood-tools API:', error);
+    return Response.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    );
+  }
+}
+
+async function handleQuickWins(request: Request): Promise<Response> {
+  try {
+    const body: QuickWinsRequest = await request.json().catch(() => ({}));
+    const { count = 3, timeOfDay = 'afternoon' } = body;
+
     const timeContext = {
       morning: 'energizing morning activities to start the day positively',
       afternoon: 'refreshing midday activities to boost energy and mood',
@@ -120,24 +150,26 @@ Format your response as a JSON array with this structure:
 Only return the JSON array, no additional text.`;
 
     try {
-      const response = await this.makeGeminiRequest(prompt);
+      const response = await makeGeminiRequest(prompt);
       
       // Parse the JSON response
       const cleanResponse = response.replace(/```json\n?|\n?```/g, '').trim();
       const tasks = JSON.parse(cleanResponse);
       
       // Convert to QuickWin format
-      return tasks.map((task: any, index: number) => ({
+      const quickWins: QuickWin[] = tasks.map((task: any, index: number) => ({
         id: `ai-${Date.now()}-${index}`,
         text: task.text,
         completed: false,
         category: task.category || 'mental'
       }));
 
+      return Response.json({ quickWins });
+
     } catch (error) {
       console.error('Error generating quick wins:', error);
       
-      // Fallback quick wins with more variety
+      // Fallback quick wins
       const fallbackTasks = [
         { text: 'Take 5 deep breaths and notice how your body feels', category: 'mindful' },
         { text: 'Write down one thing you accomplished today', category: 'mental' },
@@ -156,25 +188,36 @@ Only return the JSON array, no additional text.`;
         { text: 'Write down a positive affirmation about yourself', category: 'mental' }
       ];
 
-      // Randomly select the requested number of tasks
       const shuffled = fallbackTasks.sort(() => 0.5 - Math.random());
-      return shuffled.slice(0, count).map((task, index) => ({
+      const quickWins: QuickWin[] = shuffled.slice(0, count).map((task, index) => ({
         id: `fallback-${Date.now()}-${index}`,
         text: task.text,
         completed: false,
         category: task.category as QuickWin['category']
       }));
-    }
-  }
 
-  async generateAffirmation(isPremium: boolean = false): Promise<AffirmationResponse> {
+      return Response.json({ quickWins });
+    }
+  } catch (error) {
+    console.error('Error in quick wins handler:', error);
+    return Response.json(
+      { error: 'Failed to generate quick wins' },
+      { status: 500 }
+    );
+  }
+}
+
+async function handleAffirmation(request: Request): Promise<Response> {
+  try {
+    const body: AffirmationRequest = await request.json().catch(() => ({}));
+    const { isPremium = false } = body;
+
     const premiumContext = isPremium 
       ? 'Create a deeply personalized, empowering message that feels like it was written specifically for someone on their unique healing journey.'
       : 'Create an uplifting, universal message that resonates with anyone seeking emotional support.';
 
-    // Add context about avoiding repetition
-    const avoidanceContext = this.lastAffirmations.length > 0 
-      ? `\n\nIMPORTANT: Avoid creating messages similar to these recent ones: ${this.lastAffirmations.join(' | ')}`
+    const avoidanceContext = lastAffirmations.length > 0 
+      ? `\n\nIMPORTANT: Avoid creating messages similar to these recent ones: ${lastAffirmations.join(' | ')}`
       : '';
 
     const prompt = `Generate a unique, inspiring message for someone seeking emotional wellness and strength. ${premiumContext}
@@ -206,30 +249,29 @@ Format your response as JSON:
 Only return the JSON object, no additional text.`;
 
     try {
-      const response = await this.makeGeminiRequest(prompt);
+      const response = await makeGeminiRequest(prompt);
       
-      // Parse the JSON response
       const cleanResponse = response.replace(/```json\n?|\n?```/g, '').trim();
       const affirmation = JSON.parse(cleanResponse);
       
-      const result = {
+      const result: AffirmationResponse = {
         text: affirmation.text,
         type: affirmation.type || 'affirmation',
         author: affirmation.author || undefined
       };
 
       // Track this affirmation to avoid repetition
-      this.lastAffirmations.push(result.text);
-      if (this.lastAffirmations.length > this.maxHistorySize) {
-        this.lastAffirmations.shift(); // Remove oldest
+      lastAffirmations.push(result.text);
+      if (lastAffirmations.length > maxHistorySize) {
+        lastAffirmations.shift();
       }
 
-      return result;
+      return Response.json({ affirmation: result });
 
     } catch (error) {
       console.error('Error generating affirmation:', error);
       
-      // Enhanced fallback affirmations with more variety
+      // Enhanced fallback affirmations
       const fallbackAffirmations = [
         {
           text: "You are braver than you believe, stronger than you seem, and more loved than you'll ever know.",
@@ -267,118 +309,28 @@ Only return the JSON object, no additional text.`;
           text: "You are worthy of love and belonging exactly as you are.",
           type: 'affirmation' as const,
           author: 'Brené Brown'
-        },
-        {
-          text: "Sometimes the bravest thing you can do is rest.",
-          type: 'proverb' as const
-        },
-        {
-          text: "I am enough, I have enough, I do enough.",
-          type: 'mantra' as const
-        },
-        {
-          text: "Your journey is unique, and every step forward matters.",
-          type: 'affirmation' as const
-        },
-        {
-          text: "In this moment, you have everything you need to take the next right step.",
-          type: 'mantra' as const
-        },
-        {
-          text: "Growth begins at the end of your comfort zone.",
-          type: 'proverb' as const
-        },
-        {
-          text: "You are not broken. You are breaking through.",
-          type: 'affirmation' as const
-        },
-        {
-          text: "Peace comes from within. Do not seek it without.",
-          type: 'quote' as const,
-          author: 'Buddha'
-        },
-        {
-          text: "I choose courage over comfort.",
-          type: 'mantra' as const
-        },
-        {
-          text: "Your sensitivity is a strength, not a weakness.",
-          type: 'affirmation' as const
-        },
-        {
-          text: "What lies behind us and what lies before us are tiny matters compared to what lies within us.",
-          type: 'quote' as const,
-          author: 'Ralph Waldo Emerson'
-        },
-        {
-          text: "I am learning to trust my own journey.",
-          type: 'mantra' as const
-        },
-        {
-          text: "You don't have to be perfect to be worthy of love.",
-          type: 'affirmation' as const
         }
       ];
 
-      // Filter out recently used affirmations if possible
       const availableAffirmations = fallbackAffirmations.filter(
-        aff => !this.lastAffirmations.some(recent => recent.includes(aff.text.substring(0, 20)))
+        aff => !lastAffirmations.some(recent => recent.includes(aff.text.substring(0, 20)))
       );
 
       const selectedAffirmations = availableAffirmations.length > 0 ? availableAffirmations : fallbackAffirmations;
       const randomAffirmation = selectedAffirmations[Math.floor(Math.random() * selectedAffirmations.length)];
       
-      // Track this fallback affirmation too
-      this.lastAffirmations.push(randomAffirmation.text);
-      if (this.lastAffirmations.length > this.maxHistorySize) {
-        this.lastAffirmations.shift();
+      lastAffirmations.push(randomAffirmation.text);
+      if (lastAffirmations.length > maxHistorySize) {
+        lastAffirmations.shift();
       }
 
-      return randomAffirmation;
+      return Response.json({ affirmation: randomAffirmation });
     }
-  }
-
-  async generatePersonalizedQuickWins(userMood: string, completedTasks: string[] = []): Promise<QuickWin[]> {
-    const prompt = `Based on the user's current mood: "${userMood}", generate 3 personalized quick win tasks that would be most helpful right now.
-
-Consider:
-- Their emotional state and what might lift their spirits
-- Avoid suggesting tasks similar to these recently completed ones: ${completedTasks.join(', ')}
-- Mix different approaches: physical movement, mental wellness, social connection, creative expression, mindfulness
-- Make tasks feel achievable and specifically relevant to their current mood
-- Each task should take 5-15 minutes maximum
-
-Format your response as a JSON array:
-[
-  {
-    "text": "specific task description tailored to their mood",
-    "category": "physical|mental|social|creative|mindful"
-  }
-]
-
-Only return the JSON array, no additional text.`;
-
-    try {
-      const response = await this.makeGeminiRequest(prompt);
-      
-      const cleanResponse = response.replace(/```json\n?|\n?```/g, '').trim();
-      const tasks = JSON.parse(cleanResponse);
-      
-      return tasks.map((task: any, index: number) => ({
-        id: `mood-${Date.now()}-${index}`,
-        text: task.text,
-        completed: false,
-        category: task.category || 'mental'
-      }));
-
-    } catch (error) {
-      console.error('Error generating personalized quick wins:', error);
-      
-      // Fallback to regular quick wins
-      return this.generateQuickWins(3);
-    }
+  } catch (error) {
+    console.error('Error in affirmation handler:', error);
+    return Response.json(
+      { error: 'Failed to generate affirmation' },
+      { status: 500 }
+    );
   }
 }
-
-export const moodToolsService = new MoodToolsService();
-export type { QuickWin, AffirmationResponse };
